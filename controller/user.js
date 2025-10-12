@@ -1,6 +1,6 @@
 const User = require('../model/userSchema');
 const { sendEmailUpdateOTP } = require('../services/emailService');
-const { sendPhoneUpdateOTP } = require('../services/smsService');
+const { sendOTP } = require('../services/smsService');
 const { generateAlphanumericOTP } = require('../utils/otpGenerator');
 
 
@@ -409,7 +409,7 @@ exports.ProfilePhoneUpdate = async (req, res) => {
             otpSentAt
         });
 
-        await sendPhoneUpdateOTP(newPhoneNumber, otp);
+        await sendOTP(newPhoneNumber, otp);
 
         res.status(200).json({
             success: true,
