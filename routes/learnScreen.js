@@ -62,11 +62,39 @@ router.get(
   learnScreen.searchEntriesInTopic
 );
 
-// Cross-category search - search across different main categories
+// Cross-category search - search across different main categories use in message screen
 router.get(
   "/search/cross-category",
   authenticateToken,
   learnScreen.crossCategorySearch
+);
+
+// Search subcategories by name
+router.get(
+  "/search/subcategories",
+  authenticateToken,
+  learnScreen.searchSubCategories
+);
+
+// Continue reading - get topics user has visited/read before
+router.get(
+  "/continue-reading",
+  authenticateToken,
+  learnScreen.getContinueReadingTopics
+);
+
+// Continue reading for topics-only categories
+router.get(
+  "/continue-reading-topics",
+  authenticateToken,
+  learnScreen.getContinueReadingTopicsOnly
+);
+
+// Mark topic as read (for topics-only categories)
+router.post(
+  "/main-category/:mainCategoryId/sub-category/:subCategoryId/topic/:topicId/mark-read",
+  authenticateToken,
+  learnScreen.markTopicAsRead
 );
 
 // Mark entry as read

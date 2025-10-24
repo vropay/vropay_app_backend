@@ -45,6 +45,17 @@ const topicSchema = new mongoose.Schema(
       required: true,
     },
     entries: [entrySchema],
+    readBy: [{
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+      },
+      readAt: {
+        type: Date,
+        default: Date.now
+      }
+    }],
     deletedAt: {
       type: Date,
       default: null,

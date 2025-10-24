@@ -360,15 +360,13 @@ exports.crossCategorySearch = async (req, res) => {
                 subCategory.topics.forEach(topic => {
                     topic.entries.forEach(entry => {
                         if (entry.deletedAt === null && 
-                            (entry.title.toLowerCase().includes(query.toLowerCase()) ||
-                             entry.body.toLowerCase().includes(query.toLowerCase()))) {
+                            entry.title.toLowerCase().includes(query.toLowerCase())) {
                             
                             searchResults.push({
                                 _id: entry._id,
                                 title: entry.title,
                                 highlightedTitle: highlightSearchText(entry.title, query),
                                 body: entry.body,
-                                highlightedBody: highlightSearchText(entry.body, query),
                                 image: entry.image,
                                 footer: entry.footer,
                                 createdAt: entry.createdAt,
@@ -391,23 +389,21 @@ exports.crossCategorySearch = async (req, res) => {
                 });
             });
         } else {
-            // Search across all main categories
-            const allMainCategories = await MainCategory.find({});
+            // Search across all main categories - only search by entry title
+            const allMainCategories = await MainCategory.find({ deletedAt: null });
             
             allMainCategories.forEach(mainCategory => {
                 mainCategory.subCategorys.forEach(subCategory => {
                     subCategory.topics.forEach(topic => {
                         topic.entries.forEach(entry => {
                             if (entry.deletedAt === null && 
-                                (entry.title.toLowerCase().includes(query.toLowerCase()) ||
-                                 entry.body.toLowerCase().includes(query.toLowerCase()))) {
+                                entry.title.toLowerCase().includes(query.toLowerCase())) {
                                 
                                 searchResults.push({
                                     _id: entry._id,
                                     title: entry.title,
                                     highlightedTitle: highlightSearchText(entry.title, query),
                                     body: entry.body,
-                                    highlightedBody: highlightSearchText(entry.body, query),
                                     image: entry.image,
                                     footer: entry.footer,
                                     createdAt: entry.createdAt,
@@ -579,6 +575,399 @@ exports.searchEntriesInTopic = async (req, res) => {
 
     } catch (error) {
         console.error('Search entries in topic error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+// Search subcategories by name
+exports.searchSubCategories = async (req, res) => {
+    try {
+        const { query, page = 1, limit = 10, mainCategoryId } = req.query;
+
+        if (!query || query.trim() === '') {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Search query is required' 
+            });
+        }
+
+        // Helper function to highlight search text
+        const highlightSearchText = (text, searchQuery) => {
+            if (!searchQuery || !text) return text;
+            
+            const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            return text.replace(regex, '<mark>$1</mark>');
+        };
+
+        let searchResults = [];
+
+        if (mainCategoryId) {
+            // Search in specific main category
+            const mainCategory = await MainCategory.findById(mainCategoryId);
+            if (!mainCategory) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Main category not found' 
+                });
+            }
+
+            // Search through subcategories in the specific main category
+            mainCategory.subCategorys.forEach(subCategory => {
+                if (subCategory.deletedAt === null && 
+                    subCategory.name.toLowerCase().includes(query.toLowerCase())) {
+                    
+                    searchResults.push({
+                        _id: subCategory._id,
+                        name: subCategory.name,
+                        highlightedName: highlightSearchText(subCategory.name, query),
+                        topicsCount: subCategory.topics.length,
+                        createdAt: subCategory.createdAt,
+                        updatedAt: subCategory.updatedAt,
+                        mainCategory: {
+                            _id: mainCategory._id,
+                            name: mainCategory.name
+                        }
+                    });
+                }
+            });
+        } else {
+            // Search across all main categories
+            const allMainCategories = await MainCategory.find({ deletedAt: null });
+            
+            allMainCategories.forEach(mainCategory => {
+                mainCategory.subCategorys.forEach(subCategory => {
+                    if (subCategory.deletedAt === null && 
+                        subCategory.name.toLowerCase().includes(query.toLowerCase())) {
+                        
+                        searchResults.push({
+                            _id: subCategory._id,
+                            name: subCategory.name,
+                            highlightedName: highlightSearchText(subCategory.name, query),
+                            topicsCount: subCategory.topics.length,
+                            createdAt: subCategory.createdAt,
+                            updatedAt: subCategory.updatedAt,
+                            mainCategory: {
+                                _id: mainCategory._id,
+                                name: mainCategory.name
+                            }
+                        });
+                    }
+                });
+            });
+        }
+
+        // Sort by relevance (exact matches first, then partial matches)
+        searchResults.sort((a, b) => {
+            const aName = a.name.toLowerCase();
+            const bName = b.name.toLowerCase();
+            const searchQuery = query.toLowerCase();
+            
+            // Exact match gets highest priority
+            if (aName === searchQuery && bName !== searchQuery) return -1;
+            if (bName === searchQuery && aName !== searchQuery) return 1;
+            
+            // Starts with query gets second priority
+            if (aName.startsWith(searchQuery) && !bName.startsWith(searchQuery)) return -1;
+            if (bName.startsWith(searchQuery) && !aName.startsWith(searchQuery)) return 1;
+            
+            // Alphabetical order for other matches
+            return aName.localeCompare(bName);
+        });
+
+        // Apply pagination
+        const totalResults = searchResults.length;
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedResults = searchResults.slice(startIndex, endIndex);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                results: paginatedResults,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalResults / limit),
+                    totalResults,
+                    hasNext: endIndex < totalResults,
+                    hasPrev: page > 1
+                },
+                searchQuery: query,
+                targetMainCategory: mainCategoryId ? { _id: mainCategoryId } : null
+            }
+        });
+
+    } catch (error) {
+        console.error('Search subcategories error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+// Get continue reading topics - topics that user has visited/read before
+exports.getContinueReadingTopics = async (req, res) => {
+    try {
+        const { page = 1, limit = 10 } = req.query;
+        const userId = req.user?._id;
+
+        if (!userId) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Authentication required' 
+            });
+        }
+
+        // Get all main categories
+        const allMainCategories = await MainCategory.find({ deletedAt: null });
+        let continueReadingTopics = [];
+
+        // Find topics that user has read entries from
+        allMainCategories.forEach(mainCategory => {
+            mainCategory.subCategorys.forEach(subCategory => {
+                subCategory.topics.forEach(topic => {
+                    // Check if user has read any entries in this topic
+                    const hasReadEntries = topic.entries.some(entry => 
+                        entry.readBy.some(read => read.userId.toString() === userId.toString())
+                    );
+
+                    if (hasReadEntries) {
+                        // Get the last read entry in this topic
+                        let lastReadEntry = null;
+                        let lastReadAt = null;
+
+                        topic.entries.forEach(entry => {
+                            const userRead = entry.readBy.find(read => 
+                                read.userId.toString() === userId.toString()
+                            );
+                            
+                            if (userRead) {
+                                if (!lastReadAt || userRead.readAt > lastReadAt) {
+                                    lastReadAt = userRead.readAt;
+                                    lastReadEntry = {
+                                        _id: entry._id,
+                                        title: entry.title,
+                                        image: entry.image,
+                                        readAt: userRead.readAt
+                                    };
+                                }
+                            }
+                        });
+
+                        // Count total entries and read entries in this topic
+                        const totalEntries = topic.entries.filter(entry => entry.deletedAt === null).length;
+                        const readEntries = topic.entries.filter(entry => 
+                            entry.deletedAt === null && 
+                            entry.readBy.some(read => read.userId.toString() === userId.toString())
+                        ).length;
+
+                        continueReadingTopics.push({
+                            _id: topic._id,
+                            name: topic.name,
+                            totalEntries,
+                            readEntries,
+                            progressPercentage: totalEntries > 0 ? Math.round((readEntries / totalEntries) * 100) : 0,
+                            lastReadEntry,
+                            lastReadAt,
+                            mainCategory: {
+                                _id: mainCategory._id,
+                                name: mainCategory.name
+                            },
+                            subCategory: {
+                                _id: subCategory._id,
+                                name: subCategory.name
+                            }
+                        });
+                    }
+                });
+            });
+        });
+
+        // Sort by last read date (most recent first)
+        continueReadingTopics.sort((a, b) => {
+            if (!a.lastReadAt && !b.lastReadAt) return 0;
+            if (!a.lastReadAt) return 1;
+            if (!b.lastReadAt) return -1;
+            return new Date(b.lastReadAt) - new Date(a.lastReadAt);
+        });
+
+        // Apply pagination
+        const totalResults = continueReadingTopics.length;
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedResults = continueReadingTopics.slice(startIndex, endIndex);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                topics: paginatedResults,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalResults / limit),
+                    totalResults,
+                    hasNext: endIndex < totalResults,
+                    hasPrev: page > 1
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get continue reading topics error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+// Mark topic as read (for topics-only categories)
+exports.markTopicAsRead = async (req, res) => {
+    try {
+        const { mainCategoryId, subCategoryId, topicId } = req.params;
+        
+        // Check if user is authenticated
+        if (!req.user || !req.user._id) {
+            return res.status(401).json({ success: false, message: 'Authentication required' });
+        }
+        const userId = req.user._id;
+
+        const mainCategory = await MainCategory.findById(mainCategoryId);
+        if (!mainCategory) {
+            return res.status(404).json({ success: false, message: 'Main category not found' });
+        }
+
+        const subCategory = mainCategory.subCategorys.id(subCategoryId);
+        if (!subCategory) {
+            return res.status(404).json({ success: false, message: 'Sub category not found' });
+        }
+
+        const topic = subCategory.topics.id(topicId);
+        if (!topic) {
+            return res.status(404).json({ success: false, message: 'Topic not found' });
+        }
+
+        // Check if user has already read this topic
+        const alreadyRead = topic.readBy.some(read => read.userId.toString() === userId.toString());
+        
+        if (!alreadyRead) {
+            // Add user to readBy array
+            topic.readBy.push({ userId });
+            await mainCategory.save();
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Topic marked as read'
+        });
+
+    } catch (error) {
+        console.error('Mark topic as read error:', error);
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+// Get continue reading topics (for topics-only categories)
+exports.getContinueReadingTopicsOnly = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, mainCategoryId } = req.query;
+        const userId = req.user?._id;
+
+        if (!userId) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Authentication required' 
+            });
+        }
+
+        let searchResults = [];
+
+        if (mainCategoryId) {
+            // Search in specific main category
+            const mainCategory = await MainCategory.findById(mainCategoryId);
+            if (!mainCategory) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Main category not found' 
+                });
+            }
+
+            // Find topics that user has read in the specific main category
+            mainCategory.subCategorys.forEach(subCategory => {
+                subCategory.topics.forEach(topic => {
+                    const userRead = topic.readBy.find(read => 
+                        read.userId.toString() === userId.toString()
+                    );
+
+                    if (userRead && topic.deletedAt === null) {
+                        searchResults.push({
+                            _id: topic._id,
+                            name: topic.name,
+                            readAt: userRead.readAt,
+                            mainCategory: {
+                                _id: mainCategory._id,
+                                name: mainCategory.name
+                            },
+                            subCategory: {
+                                _id: subCategory._id,
+                                name: subCategory.name
+                            }
+                        });
+                    }
+                });
+            });
+        } else {
+            // Search across all main categories
+            const allMainCategories = await MainCategory.find({ deletedAt: null });
+            
+            allMainCategories.forEach(mainCategory => {
+                mainCategory.subCategorys.forEach(subCategory => {
+                    subCategory.topics.forEach(topic => {
+                        const userRead = topic.readBy.find(read => 
+                            read.userId.toString() === userId.toString()
+                        );
+
+                        if (userRead && topic.deletedAt === null) {
+                            searchResults.push({
+                                _id: topic._id,
+                                name: topic.name,
+                                readAt: userRead.readAt,
+                                mainCategory: {
+                                    _id: mainCategory._id,
+                                    name: mainCategory.name
+                                },
+                                subCategory: {
+                                    _id: subCategory._id,
+                                    name: subCategory.name
+                                }
+                            });
+                        }
+                    });
+                });
+            });
+        }
+
+        // Sort by read date (most recent first)
+        searchResults.sort((a, b) => {
+            return new Date(b.readAt) - new Date(a.readAt);
+        });
+
+        // Apply pagination
+        const totalResults = searchResults.length;
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedResults = searchResults.slice(startIndex, endIndex);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                topics: paginatedResults,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalResults / limit),
+                    totalResults,
+                    hasNext: endIndex < totalResults,
+                    hasPrev: page > 1
+                },
+                targetMainCategory: mainCategoryId ? { _id: mainCategoryId } : null
+            }
+        });
+
+    } catch (error) {
+        console.error('Get continue reading topics only error:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
