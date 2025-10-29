@@ -274,11 +274,11 @@ const shareEntry = async (req, res) => {
         const { interestId, message, mainCategoryId, subCategoryId, topicId, entryId } = req.body;
         const userId = req.user?._id; // Get userId from token
 
-        // Validate required fields
-        if (!interestId || !message || !mainCategoryId || !subCategoryId || !topicId || !entryId) {
+        // Allow either full path (mainCategoryId, subCategoryId, topicId, entryId) or only entryId
+        if (!interestId || !message || !entryId) {
             return res.status(400).json({
                 success: false,
-                message: 'interestId, message, mainCategoryId, subCategoryId, topicId, and entryId are required'
+                message: 'interestId, message, and entryId are required'
             });
         }
 
@@ -317,38 +317,82 @@ const shareEntry = async (req, res) => {
             });
         }
 
-        // Get the entry details from learnScreen
+        // Resolve entry and its path
         const MainCategory = require('../model/learnScreenSchema');
-        const mainCategory = await MainCategory.findById(mainCategoryId);
-        if (!mainCategory) {
-            return res.status(404).json({
-                success: false,
-                message: 'Main category not found'
-            });
-        }
 
-        const subCategory = mainCategory.subCategorys.id(subCategoryId);
-        if (!subCategory) {
-            return res.status(404).json({
-                success: false,
-                message: 'Sub category not found'
-            });
-        }
+        let resolvedMainCategoryId = mainCategoryId;
+        let resolvedSubCategoryId = subCategoryId;
+        let resolvedTopicId = topicId;
+        let entry;
 
-        const topic = subCategory.topics.id(topicId);
-        if (!topic) {
-            return res.status(404).json({
-                success: false,
-                message: 'Topic not found'
-            });
-        }
+        if (resolvedMainCategoryId && resolvedSubCategoryId && resolvedTopicId) {
+            // Use provided path to locate the entry
+            const mainCategory = await MainCategory.findById(resolvedMainCategoryId);
+            if (!mainCategory) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Main category not found'
+                });
+            }
 
-        const entry = topic.entries.id(entryId);
-        if (!entry) {
-            return res.status(404).json({
-                success: false,
-                message: 'Entry not found'
-            });
+            const subCategory = mainCategory.subCategorys.id(resolvedSubCategoryId);
+            if (!subCategory) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Sub category not found'
+                });
+            }
+
+            const topic = subCategory.topics.id(resolvedTopicId);
+            if (!topic) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Topic not found'
+                });
+            }
+
+            entry = topic.entries.id(entryId);
+            if (!entry) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Entry not found'
+                });
+            }
+        } else {
+            // Derive path from entryId only
+            const candidates = await MainCategory.find({
+                'subCategorys.topics.entries._id': entryId
+            }).lean();
+
+            if (!candidates || candidates.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Entry not found'
+                });
+            }
+
+            const mainCategoryDoc = candidates[0];
+            // Walk the nested structure to find the exact path and entry
+            for (const subCat of mainCategoryDoc.subCategorys) {
+                for (const topic of subCat.topics) {
+                    const found = topic.entries.find(e => e._id.toString() === entryId.toString());
+                    if (found) {
+                        resolvedMainCategoryId = mainCategoryDoc._id;
+                        resolvedSubCategoryId = subCat._id;
+                        resolvedTopicId = topic._id;
+                        entry = found;
+                        break;
+                    }
+                }
+                if (entry) break;
+            }
+
+            if (!entry) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Entry not found'
+                });
+            }
         }
 
         // Create and save the message with shared entry
@@ -358,9 +402,9 @@ const shareEntry = async (req, res) => {
             message,
             isImportant: false,
             sharedEntry: {
-                mainCategoryId,
-                subCategoryId,
-                topicId,
+                mainCategoryId: resolvedMainCategoryId,
+                subCategoryId: resolvedSubCategoryId,
+                topicId: resolvedTopicId,
                 entryId,
                 title: entry.title,
                 body: entry.body
