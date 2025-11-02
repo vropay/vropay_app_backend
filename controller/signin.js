@@ -21,7 +21,19 @@ exports.signin = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found. Please register yourself first' });
         }
 
-        const otp = generateAlphanumericOTP();
+        // Static OTP for test number (1234567890) - for Google Play Store testing
+        // Handle different formats: 1234567890, +1234567890, 91234567890, +91234567890
+        const normalizedPhone = phoneNumber.replace(/\D/g, ''); // Remove all non-digits
+        const isTestNumber = normalizedPhone === '1234567890' || normalizedPhone.endsWith('1234567890');
+        
+        let otp;
+        if (isTestNumber) {
+            otp = 'VR95P'; // Static OTP for test user
+            console.log('🧪 Test OTP generated for phone:', phoneNumber);
+        } else {
+            otp = generateAlphanumericOTP();
+        }
+
         const otpExpires = new Date(Date.now() + 2 * 60 * 1000);
         const otpSentAt = new Date();
 
@@ -31,7 +43,10 @@ exports.signin = async (req, res) => {
             otpSentAt
         });
 
-        await sendOTP(phoneNumber, otp);
+        // Skip SMS for test number to avoid unnecessary API calls
+        if (!isTestNumber) {
+            await sendOTP(phoneNumber, otp);
+        }
 
         res.status(200).json({
             success: true,
@@ -55,6 +70,25 @@ exports.verifySignin = async (req, res) => {
         const user = await User.findOne({ phoneNumber });
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Check for test number and static OTP
+        const normalizedPhone = phoneNumber.replace(/\D/g, ''); // Remove all non-digits
+        const isTestNumber = normalizedPhone === '1234567890' || normalizedPhone.endsWith('1234567890');
+        
+        // For test number, accept static OTP "VR95P" even if not stored (backup check)
+        if (isTestNumber && otp === 'VR95P') {
+            // If user.otp doesn't exist or is different, update it for test user
+            if (!user.otp || user.otp !== 'VR95P') {
+                await User.findByIdAndUpdate(user._id, {
+                    otp: 'VR95P',
+                    otpExpires: new Date(Date.now() + 2 * 60 * 1000)
+                });
+                // Refetch user to get updated OTP
+                const updatedUser = await User.findById(user._id);
+                user.otp = updatedUser.otp;
+                user.otpExpires = updatedUser.otpExpires;
+            }
         }
 
         if (!user.otp) {
@@ -114,8 +148,13 @@ exports.resendSigninOTP = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found. Please register yourself first' });
         }
 
+        // Check for test number
+        const normalizedPhone = phoneNumber.replace(/\D/g, ''); // Remove all non-digits
+        const isTestNumber = normalizedPhone === '1234567890' || normalizedPhone.endsWith('1234567890');
+
         // Rate limiting: Check if OTP was sent recently (within last 60 seconds)
-        if (user.otpSentAt && user.otpSentAt > new Date(Date.now() - 60 * 1000)) {
+        // Skip rate limiting for test number
+        if (!isTestNumber && user.otpSentAt && user.otpSentAt > new Date(Date.now() - 60 * 1000)) {
             const timeLeft = Math.ceil((user.otpSentAt - new Date(Date.now() - 60 * 1000)) / 1000);
             return res
                 .status(429)
@@ -125,8 +164,15 @@ exports.resendSigninOTP = async (req, res) => {
                 });
         }
 
-        // Generate new OTP
-        const otp = generateAlphanumericOTP();
+        // Generate new OTP (static for test number)
+        let otp;
+        if (isTestNumber) {
+            otp = 'VR95P'; // Static OTP for test user
+            console.log('🧪 Test OTP resent for phone:', phoneNumber);
+        } else {
+            otp = generateAlphanumericOTP();
+        }
+
         const otpExpires = new Date(Date.now() + 2 * 60 * 1000);
         const otpSentAt = new Date();
 
@@ -137,8 +183,10 @@ exports.resendSigninOTP = async (req, res) => {
             otpSentAt
         });
 
-        // Send OTP via SMS
-        await sendOTP(phoneNumber, otp);
+        // Skip SMS for test number to avoid unnecessary API calls
+        if (!isTestNumber) {
+            await sendOTP(phoneNumber, otp);
+        }
 
         res.status(200).json({
             success: true,
